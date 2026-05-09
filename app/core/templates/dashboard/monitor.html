@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tessact Dashboard</title>
+    <!-- Using Tailwind for a clean, professional look -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-light">
+    <nav class="p-6 border-b border-gray-200 bg-white">
+        <h1 class="text-xs uppercase tracking-widest font-bold text-gray-400">Pipeline Status / {{ job.id }}</h1>
+    </nav>
+
+    <main class="max-w-6xl mx-auto p-12">
+        <!-- Header Status -->
+        <div class="flex justify-between items-end mb-12">
+            <div>
+                <h2 class="text-4xl font-serif mb-2">{{ job.client_name }}</h2>
+                <p class="text-gray-500">Status: 
+                    <span class="{% if job.status == 'COMPLETED' %}text-green-600{% elif job.status == 'FAILED' %}text-red-600{% else %}text-orange-500{% endif %} font-medium">
+                        {{ job.status }}
+                    </span>
+                </p>
+            </div>
+            <div class="text-right text-sm text-gray-400 font-mono">
+                Duration: {{ job.total_time|default:"--"|floatformat:2 }}s
+            </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-12">
+            <!-- Column 1: Context & Blueprint -->
+            <div class="col-span-1 space-y-8">
+                <section>
+                    <h3 class="text-xs uppercase tracking-widest font-bold mb-4">Timings</h3>
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100 text-sm">
+                        <p class="flex justify-between mb-2">
+                            <span class="text-gray-500">Orchestration:</span> 
+                            <span class="font-mono">{{ job.orchestration_time|default:"--"|floatformat:2 }}s</span>
+                        </p>
+                        <p class="flex justify-between">
+                            <span class="text-gray-500">Asset Gen & Stitching:</span> 
+                            <span class="font-mono">{{ job.generation_time|default:"--"|floatformat:2 }}s</span>
+                        </p>
+                    </div>
+                </section>
+                <section>
+                    <h3 class="text-xs uppercase tracking-widest font-bold mb-4">JSON Blueprint</h3>
+                    <pre class="bg-gray-900 text-pink-400 p-4 rounded-lg text-[10px] overflow-auto max-h-96">{{ job.blueprint_json|pprint }}</pre>
+                </section>
+            </div>
+
+            <!-- Column 2: Visual Assets -->
+            <div class="col-span-2 space-y-8">
+                <h3 class="text-xs uppercase tracking-widest font-bold mb-4">Scene Preview</h3>
+                {% if job.status == 'COMPLETED' %}
+                    <video controls class="w-full rounded-2xl shadow-2xl border border-gray-100">
+                        <source src="/media/{{ job.id }}/final_short.mp4" type="video/mp4">
+                    </video>
+                {% else %}
+                    <div class="aspect-video bg-gray-200 rounded-2xl flex items-center justify-center animate-pulse">
+                        <p class="text-gray-400 italic">Rendering Pipeline in Progress...</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </main>
+</body>
+</html>

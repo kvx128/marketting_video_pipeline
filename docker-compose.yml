@@ -1,0 +1,67 @@
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tessact_db
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U dev_user -d tessact_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Celery broker) ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Django web server ──────────────────────────────────────────────────────
+  web:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - .:/app # live-reload during development
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres://dev_user:dev_pass@db:5432/tessact_db
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env # GEMINI_API_KEY and secrets live here
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Celery worker (heavy GenAI tasks run async) ────────────────────────────
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A core worker --loglevel=info --concurrency=2
+    volumes:
+      - .:/app
+    environment:
+      DATABASE_URL: postgres://dev_user:dev_pass@db:5432/tessact_db
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

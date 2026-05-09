@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Media and User Data (Exclude from image, use volumes)
+media/
+jobs/
+global_assets/
+data/
+
+# IDEs
+.vscode/
+.idea/
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore

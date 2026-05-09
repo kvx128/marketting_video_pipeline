@@ -1,0 +1,17 @@
+{
+  // Point VS Code to the project's virtual environment
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}\\.venv\\Lib\\site-packages"
+  ],
+
+  // Pylance / Pyright — resolve imports from the venv, not the system Python
+  "python.analysis.venvPath": "${workspaceFolder}",
+  "python.analysis.venv": ".venv",
+
+  // Suppress false-positive "module not found" errors for stubs that come
+  // from the venv (django-stubs, celery-types, etc. are optional but helpful)
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "basic"
+}

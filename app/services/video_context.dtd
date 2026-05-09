@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!ELEMENT VideoContext (BrandProfile, VideoIntent)>
+
+<!ELEMENT BrandProfile (company_name, mission, vision, products, brand_guidelines)>
+<!ELEMENT company_name    (#PCDATA)>
+<!ELEMENT mission         (#PCDATA)>
+<!ELEMENT vision          (#PCDATA)>
+<!ELEMENT products        (#PCDATA)>
+<!ELEMENT brand_guidelines (#PCDATA)>
+
+<!ELEMENT VideoIntent (intent, duration, dimensions, platform, requirements)>
+<!ELEMENT intent       (#PCDATA)>
+<!ELEMENT duration     (#PCDATA)>
+<!ELEMENT dimensions   (#PCDATA)>
+<!ELEMENT platform     (#PCDATA)>
+<!ELEMENT requirements (#PCDATA)>
