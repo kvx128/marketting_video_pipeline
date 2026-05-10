@@ -87,24 +87,49 @@ def process_video_generation(self, job_id: str) -> dict:
         # ── Stage 3: Asset Generation & Stitching (Prompt 4) ──────────────────
         from app.services.asset_manager import AssetManager
         from app.services.video_engine import VideoComposer
+        from app.services.veo_engine import VeoEngine
 
         logger.info("VideoJob %s — Stage 3: Asset generation (idempotent)", job_id)
         start_gen = time.time()
         manager = AssetManager(job_id)
+        veo_engine = VeoEngine()
         scene_paths = {}
         first_scene_path = None
 
         for i, scene in enumerate(blueprint['scenes']):
+            is_avatar_shot = (i == 0 or i == len(blueprint['scenes']) - 1)
+            
             # Style Transfer Logic: Use the first image as a style reference for the others
             if i == 0:
                 path = manager.get_asset(scene['visual_prompt'])
                 first_scene_path = path
+                scene_paths[i] = path
+            elif not is_avatar_shot:
+                # Middle scenes: use Veo to generate a video clip with Global Cache support
+                prompt = scene['visual_prompt']
+                motion = scene.get('motion_instruction')
+                
+                def veo_gen(target):
+                    return veo_engine.generate_animated_clip(
+                        prompt, 
+                        target,
+                        motion_instruction=motion
+                    )
+                
+                # Get asset as .mp4, using veo_gen if cache miss
+                video_path = manager.get_asset(
+                    prompt, 
+                    extension=".mp4",
+                    generator_func=veo_gen,
+                    suffix=f"veo_{motion}"
+                )
+                scene_paths[i] = video_path
             else:
                 path = manager.get_asset(
                     scene['visual_prompt'], 
                     reference_image_path=first_scene_path
                 )
-            scene_paths[i] = path
+                scene_paths[i] = path
 
         logger.info("VideoJob %s — Stage 4: Video composition", job_id)
         # Assemble using MoviePy

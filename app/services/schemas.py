@@ -107,14 +107,20 @@ class VideoBlueprintSchema(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def check_scene_numbers_sequential(self) -> "VideoBlueprintSchema":
-        numbers = [s.scene_number for s in self.scenes]
-        expected = list(range(1, len(self.scenes) + 1))
-        if numbers != expected:
-            raise ValueError(
-                f"scene_number values must be sequential starting at 1. "
-                f"Got: {numbers}"
-            )
+    def fix_scene_numbers_sequential(self) -> "VideoBlueprintSchema":
+        """
+        LLMs sometimes glitch on sequential counting (e.g. 1, 2, 6, 4, 5).
+        Instead of failing the whole job, we auto-sort by the returned numbers
+        and re-index them to be strictly sequential [1..N].
+        """
+        # Sort scenes by the scene_number Gemini gave us
+        sorted_scenes = sorted(self.scenes, key=lambda s: s.scene_number)
+        
+        # Re-index them 1 to N
+        for i, scene in enumerate(sorted_scenes):
+            scene.scene_number = i + 1
+            
+        self.scenes = sorted_scenes
         return self
 
     # ── Convenience properties ─────────────────────────────────────────────────

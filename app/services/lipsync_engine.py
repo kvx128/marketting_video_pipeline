@@ -26,23 +26,32 @@ class LipSyncEngine:
     def _simulate_lipsync(self, image_path, audio_path, output_path):
         from PIL import Image
         if not hasattr(Image, 'ANTIALIAS'):
-            Image.ANTIALIAS = Image.Resampling.LANCZOS
+            # Compatibility for MoviePy which expects PIL.Image.ANTIALIAS
+            resampling = getattr(Image, 'Resampling', None)
+            resample_val = getattr(resampling, 'LANCZOS', 1) if resampling else 1
+            setattr(Image, 'ANTIALIAS', resample_val)
             
         from moviepy.editor import ImageClip, AudioFileClip
         
         try:
             audio = AudioFileClip(audio_path)
             # Duration based on audio, or a minimum if audio is empty
-            duration = max(audio.duration, 1.0) if audio.duration > 0 else 5.0
+            audio_duration = getattr(audio, 'duration', 0)
+            if audio_duration is None:
+                audio_duration = 0
+            duration = max(float(audio_duration), 1.0) if audio_duration > 0 else 5.0
+            
+            # Ensure audio is exactly the same duration as the clip to prevent buffer issues
+            # during concatenation/composition in MoviePy.
+            audio = audio.set_duration(duration)
             
             clip = ImageClip(image_path).set_duration(duration)
             # Add a slight "breathing" zoom effect to make it feel 'alive'
-            # Note: The zoom lambda requires a resize operation which moviepy can do 
-            # if we apply it properly.
             clip = clip.resize(lambda t: 1 + 0.02*t) 
             clip = clip.set_audio(audio)
             
-            clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
+            # Explicitly set fps and audio settings
+            clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True)
         except Exception as e:
             logger.error(f"Simulated lipsync failed: {e}")
             # Fallback to just the image without audio if it fails

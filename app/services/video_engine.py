@@ -28,9 +28,19 @@ class VideoComposer:
         """Creates a composite clip for a single scene with image and text overlay."""
         duration = scene_data["duration"]
         
-        # Base image clip
+        # Base clip (image or video)
         logger.info("Creating clip for scene %d from %s", scene_data["scene_number"], image_path)
-        clip = ImageClip(image_path).set_duration(duration)
+        
+        if image_path.lower().endswith(('.mp4', '.mov', '.avi')):
+            clip = VideoFileClip(image_path)
+            # Make sure it matches the desired duration by looping or clipping
+            if clip.duration < duration:
+                from moviepy.video.fx.loop import loop
+                clip = loop(clip, duration=duration)
+            else:
+                clip = clip.subclip(0, duration)
+        else:
+            clip = ImageClip(image_path).set_duration(duration)
         
         overlay_text = scene_data.get("overlay_text", "").strip()
         if overlay_text:
@@ -64,38 +74,36 @@ class VideoComposer:
         return final_clip
 
     def assemble_video(self, output_path: str) -> str:
-        """Assembles all scenes into a final output MP4."""
-        logger.info("Assembling video to %s", output_path)
+        """Assembles all scenes into a final output MP4, using raw Veo clips directly."""
+        logger.info("Assembling video (DIRECT VEO MODE) to %s", output_path)
         clips = []
         
-        # The blueprint scenes are 1-indexed, but our loop is 0-indexed
         for i, scene in enumerate(self.blueprint["scenes"]):
-            img_path = self.asset_paths.get(i)
-            if not img_path or not os.path.exists(img_path):
-                raise FileNotFoundError(f"Asset for scene {scene['scene_number']} missing: {img_path}")
+            asset_path = self.asset_paths.get(i)
+            if not asset_path or not os.path.exists(asset_path):
+                logger.warning(f"Asset for scene {i} missing, skipping...")
+                continue
                 
-            # If it's the first or last scene, make it an Avatar shot
-            if i == 0 or i == len(self.blueprint['scenes']) - 1:
-                audio_path = self.audio_engine.generate_voiceover(scene.get('voiceover_text', ''), i)
-                if audio_path:
-                    clip_path = self.lipsync_engine.generate_talking_head(
-                        img_path, audio_path, i
-                    )
-                    clips.append(VideoFileClip(clip_path))
-                else:
-                    clips.append(self.create_scene(scene, img_path))
+            # Load the clip (Video or Image)
+            if asset_path.lower().endswith(('.mp4', '.mov', '.avi')):
+                clip = VideoFileClip(asset_path)
+                # Keep it as is, or subclip if it's way too long
+                clip_duration = getattr(clip, 'duration', 0) or 0
+                if clip_duration > 10:
+                    clip = clip.subclip(0, 10)
             else:
-                # Standard marketing shot with overlay
-                clips.append(self.create_scene(scene, img_path))
+                # If it's an image, just show it for 3 seconds
+                clip = ImageClip(asset_path).set_duration(3.0)
+            
+            clips.append(clip)
         
-        logger.info("Concatenating %d clips", len(clips))
-        # Compose method handles clips of potentially different sizes/FPS 
-        # but in our case they should all be 16:9 images.
+        if not clips:
+            raise RuntimeError("No clips generated for assembly.")
+            
+        logger.info("Concatenating %d raw clips", len(clips))
+        # Use 'compose' to handle potential size differences between Veo generations
         final_video = concatenate_videoclips(clips, method="compose")
         
-        # Write to file. fps=24 is cinematic standard.
-        # logger='bar' gives a progress bar in the console.
+        # Write final video
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
-        logger.info("Video successfully written to %s", output_path)
-        
         return output_path

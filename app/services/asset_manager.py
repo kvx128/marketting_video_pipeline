@@ -44,10 +44,35 @@ class AssetManager:
     def genai_client(self):
         if self._genai is None:
             from google import genai
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                raise EnvironmentError("GEMINI_API_KEY environment variable is not set.")
-            self._genai = genai.Client(api_key=api_key)
+            from google.oauth2 import credentials
+            primary = os.getenv("VERTEX_API_KEY")
+            fallback = os.getenv("GEMINI_API_KEY")
+            
+            if not primary and not fallback:
+                raise EnvironmentError("Neither VERTEX_API_KEY nor GEMINI_API_KEY is set.")
+            
+            # Save for fallback use in _generate_image_to_path
+            self._primary_key = primary
+            self._fallback_key = fallback
+            
+            # Logic: If fallback exists and looks like a standard Gemini key (AIza...), use it first.
+            # Otherwise use primary (Vertex) if it exists.
+            # Finally, use fallback if it's all we have.
+            if fallback and fallback.startswith("AI"):
+                self._genai = genai.Client(api_key=fallback)
+            elif primary:
+                project = os.getenv("GOOGLE_CLOUD_PROJECT", "366509876542")
+                location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+                
+                if primary.startswith("AQ"):
+                    # OAuth2 Token - Create credentials object to avoid DefaultCredentialsError
+                    creds = credentials.Credentials(token=primary)
+                    self._genai = genai.Client(vertexai=True, project=project, location=location, credentials=creds)
+                else:
+                    self._genai = genai.Client(vertexai=True, project=project, location=location)
+            else:
+                # fallback is all we have but doesn't start with AI
+                self._genai = genai.Client(api_key=fallback)
         return self._genai
 
     def get_asset_hash(self, prompt: str, suffix: str = "") -> str:
@@ -86,6 +111,10 @@ class AssetManager:
                         else:
                             self._generate_image_to_path(prompt, temp_path, reference_image_path=reference_image_path)
                         
+                        # Verify the file was actually created and is not empty
+                        if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                            raise RuntimeError(f"Generator failed to produce a valid file at {temp_path}")
+
                         # Atomic rename ensures no partial reads
                         os.rename(temp_path, global_file)
                     except Exception as e:
@@ -124,21 +153,34 @@ class AssetManager:
                 "output_mime_type": "image/png"
             }
             
-            if reference_image_path and os.path.exists(reference_image_path):
-                # Using the style reference for consistency
-                with open(reference_image_path, "rb") as f:
-                    ref_img_bytes = f.read()
-                
-                # We use types.Image and ignore the restrictive int|str warning from the IDE
-                # as the SDK runtime accepts Image objects for reference_images.
-                config_args["reference_images"] = [types.Image(image_bytes=ref_img_bytes)]  # type: ignore
-                config_args["reference_type"] = "STYLE_TRANSFER"
-
-            response = self.genai_client.models.generate_images(
-                model="imagen-4.0-fast-generate-001",
-                prompt=prompt,
-                config=types.GenerateImagesConfig(**config_args)
+            from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+            
+            @retry(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                retry=retry_if_exception_type(Exception),
+                reraise=True
             )
+            def _call_image_api():
+                try:
+                    return self.genai_client.models.generate_images(
+                        model="imagen-3.0-generate-001",
+                        prompt=prompt,
+                        config=types.GenerateImagesConfig(**config_args)
+                    )
+                except Exception as e:
+                    if self._fallback_key and self._fallback_key != self._primary_key:
+                        logger.warning("Primary Image API failed. Trying fallback key...")
+                        from google import genai
+                        fallback_client = genai.Client(api_key=self._fallback_key)
+                        return fallback_client.models.generate_images(
+                            model="imagen-3.0-generate-001",
+                            prompt=prompt,
+                            config=types.GenerateImagesConfig(**config_args)
+                        )
+                    raise e
+
+            response = _call_image_api()
             
             if not response.generated_images:
                 raise RuntimeError("No images were generated by the API.")

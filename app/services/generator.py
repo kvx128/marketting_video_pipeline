@@ -37,7 +37,7 @@ from app.services.schemas import VideoBlueprintSchema
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # ── System instruction (injected as a separate role, not in user prompt) ────────
 # This keeps creative direction immutable regardless of XML content.
@@ -53,15 +53,18 @@ Your output must be a valid JSON blueprint for a 20-30 second marketing short.
 
 ═══ PROMPT ENGINEERING RULES ══════════════════════════════════════════════════
 1. HYPER-DETAILED PROMPTS: Each 'visual_prompt' must be 80-120 words. 
-   Do not just describe the scene; describe the lens, lighting, texture, and 'vibe'.
+   Do not just describe the scene; describe the lens (e.g., 35mm anamorphic), lighting (e.g., volumetric rays), texture (e.g., brushed titanium), and 'luxury marketing vibe'.
 2. CONSISTENCY HOOK: Use the 'visual_anchor' as the base for every scene.
 3. SCENING: Breakdown the client's goal into 5-6 high-impact visual beats.
 4. TYPOGRAPHY: 'overlay_text' should be concise, professional, and high-contrast.
+5. MARKETING EDGE: Use terms like 'high-end production', 'commercial grade', 'sleek transitions', 'minimalist luxury'.
 
 ═══ DURATION CONTRACT ════════════════════════════════════════════════════════
 - 5 or 6 scenes total.
 - Total duration MUST be between 20 and 30 seconds.
 - Each scene: 2-10 seconds.
+- VISUAL ANCHOR: Keep under 200 words but remain hyper-detailed.
+- JSON: Ensure all strings are terminated and the JSON is valid.
 
 ═══ OUTPUT SCHEMA (strict) ══════════════════════════════════════════════════════
 {
@@ -117,27 +120,47 @@ class GeminiOrchestrator:
     """
 
     def __init__(self, model_name: str | None = None) -> None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise EnvironmentError(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Add it to your .env file or Docker environment."
-            )
+        self.primary_api_key = os.getenv("VERTEX_API_KEY")
+        self.fallback_api_key = os.getenv("GEMINI_API_KEY")
+        
+        if not self.primary_api_key and not self.fallback_api_key:
+             raise EnvironmentError("Neither VERTEX_API_KEY nor GEMINI_API_KEY is set.")
 
         # ── Lazy import keeps Django startup free of protobuf C-extension ─────
         from google import genai  # noqa: PLC0415
         from google.genai import types
+        from google.oauth2 import credentials
 
-        self.client = genai.Client(api_key=api_key)
+        # Logic: If fallback exists and looks like a standard Gemini key (AIza...), use it first.
+        # Otherwise use primary (Vertex) if it exists.
+        fallback = self.fallback_api_key
+        primary = self.primary_api_key
+        
+        if fallback and fallback.startswith("AI"):
+            self.client = genai.Client(api_key=fallback)
+        elif primary:
+            project = os.getenv("GOOGLE_CLOUD_PROJECT", "366509876542")
+            location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            
+            if primary.startswith("AQ"):
+                # OAuth2 Token - Create credentials object to avoid DefaultCredentialsError
+                creds = credentials.Credentials(token=primary)
+                self.client = genai.Client(vertexai=True, project=project, location=location, credentials=creds)
+            else:
+                self.client = genai.Client(vertexai=True, project=project, location=location)
+        else:
+            # Only fallback exists but it doesn't start with AI
+            self.client = genai.Client(api_key=fallback)
         self.model_name = model_name or _DEFAULT_MODEL
         self.config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=VideoBlueprintSchema,  # THE KEY FIX: Enforce schema at the model level
-            temperature=0.75,          # creative but not hallucination-prone
+            response_schema=VideoBlueprintSchema,
+            temperature=0.75,
             top_p=0.95,
-            max_output_tokens=4096,
+            max_output_tokens=8192,
             system_instruction=_SYSTEM_INSTRUCTION,
         )
+        
         logger.info("GeminiOrchestrator ready — model: %s, Structured Output: ON", self.model_name)
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -163,12 +186,41 @@ class GeminiOrchestrator:
             "Requesting blueprint from %s (XML: %d chars)", self.model_name, len(xml_context)
         )
 
-        # ── 1. Gemini API call ─────────────────────────────────────────────────
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=self.config
+        # ── 1. API call with Fallback (Vertex -> Gemini) ─────────────────────
+        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+        
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            retry=retry_if_exception_type(Exception), # Catch all for fallback
+            reraise=True
         )
+        def _call_gemini():
+            try:
+                # Try configured client (could be Vertex or Gemini)
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self.config
+                )
+            except Exception as e:
+                # If we have a fallback key that's different, try that explicitly within the retry
+                if self.fallback_api_key and self.fallback_api_key != self.primary_api_key:
+                    logger.warning("Primary API call failed. Trying explicit fallback key...")
+                    from google import genai
+                    fallback_client = genai.Client(api_key=self.fallback_api_key)
+                    return fallback_client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config=self.config
+                    )
+                raise e
+
+        try:
+            response = _call_gemini()
+        except Exception as e:
+            logger.error("All Gemini API attempts failed: %s", e)
+            raise
 
         # ── 2. Handle Structured Response ──────────────────────────────────────
         if not response.parsed:
